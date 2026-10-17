@@ -613,7 +613,8 @@ enum class ScaleType(val label: String, val intervals: List<Int>) {
 }
 
 enum class NoteNotation(val shortLabel: String, val fullTitle: String, val examples: String) {
-    WESTERN("Western", "Western (C, C#, D...)", "C, C#, D, D#, E, F, F#, G, G#, A, A#, B"),
+    WESTERN("Western (#)", "Western (Sharps # - Default)", "C, C#, D, D#, E, F, F#, G, G#, A, A#, B (DAW / Tuner style)"),
+    WESTERN_THEORY("Theory (#/\u266D)", "Western (Scale Theory # / \u266D)", "C, D, E\u266D, F, G, A\u266D, B\u266D (Uses A\u2013G in order per scale)"),
     INDIAN("Indian", "Indian Swaras (Sa, Re, Ga...)", "Sa, re, Re, ga, Ga, Ma, ma, Pa, dha, Dha, ni, Ni"),
     SOLFEGE("Solf\u00E8ge", "Solf\u00E8ge (Do, Re, Mi...)", "Do, Di, Re, Ri, Mi, Fa, Fi, Sol, Si, La, Li, Ti")
 }
@@ -1116,7 +1117,7 @@ private fun TopHeaderBar(
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
                         text = if (currentHz != null) {
-                            frequencyToKeyName(currentHz, selectedNotation, selectedKeyIndex)
+                            frequencyToKeyName(currentHz, selectedNotation, selectedKeyIndex, selectedScaleType)
                         } else {
                             "--"
                         },
@@ -1127,7 +1128,7 @@ private fun TopHeaderBar(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (currentHz != null) {
-                            frequencyToNoteName(currentHz, selectedNotation, selectedKeyIndex)
+                            frequencyToNoteName(currentHz, selectedNotation, selectedKeyIndex, selectedScaleType)
                         } else {
                             ""
                         },
@@ -1159,6 +1160,11 @@ private fun TopHeaderBar(
                     // Root Key Dropdown (C, C#, D, ..., B)
                     Box(modifier = Modifier.width(58.dp)) {
                         val safeKeyIdx = selectedKeyIndex.coerceIn(0, 11)
+                        val activeRootLabel = if (selectedNotation == NoteNotation.WESTERN_THEORY) {
+                            formatKeyLabel(safeKeyIdx, NoteNotation.WESTERN_THEORY, safeKeyIdx, selectedScaleType)
+                        } else {
+                            keyNames[safeKeyIdx]
+                        }
                         Button(
                             onClick = { keyMenuExpanded = true },
                             modifier = Modifier
@@ -1172,7 +1178,7 @@ private fun TopHeaderBar(
                             )
                         ) {
                             Text(
-                                text = "${keyNames[safeKeyIdx]} \u25BE",
+                                text = "$activeRootLabel \u25BE",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1
@@ -1185,7 +1191,11 @@ private fun TopHeaderBar(
                             modifier = Modifier.background(BarSlate)
                         ) {
                             for (i in keyNames.indices) {
-                                val kName = keyNames[i]
+                                val kName = if (selectedNotation == NoteNotation.WESTERN_THEORY) {
+                                    formatKeyLabel(i, NoteNotation.WESTERN_THEORY, i, selectedScaleType)
+                                } else {
+                                    keyNames[i]
+                                }
                                 val isSelected = safeKeyIdx == i
                                 DropdownMenuItem(
                                     text = {
@@ -1726,7 +1736,7 @@ private fun LinearPitchCanvas(
 
                 val y = midiToY(midi.toFloat())
                 val octave = (midi / 12) - 1
-                val keyName = formatKeyLabel(noteIndex, selectedNotation, rootKeyIdx)
+                val keyName = formatKeyLabel(noteIndex, selectedNotation, rootKeyIdx, selectedScaleType)
                 val isSharp = noteIndex in sharpIndices
                 val isRootKey = noteIndex == rootKeyIdx
                 val isLockedPerfectRow = (perfectLockedMidi != null && midi == perfectLockedMidi)
@@ -1940,7 +1950,12 @@ private fun LinearPitchCanvas(
                         radius = 8.5f,
                         center = Offset(lastActiveX, clampedY)
                     )
-                    val liveKeyText = frequencyToKeyName(lastActiveHz, selectedNotation, selectedKeyIndex)
+                    val liveKeyText = frequencyToKeyName(
+                        lastActiveHz,
+                        selectedNotation,
+                        selectedKeyIndex,
+                        selectedScaleType
+                    )
                     val activeBadgePaint = if (lastActivePerfect) {
                         perfectKeyPaint
                     } else {
@@ -2177,21 +2192,104 @@ private fun detectPitchMPM(
 }
 
 private val WESTERN_NOTES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+private val WESTERN_FLATS = arrayOf("C", "D\u266D", "D", "E\u266D", "E", "F", "G\u266D", "G", "A\u266D", "A", "B\u266D", "B")
+private val LETTER_NAMES = arrayOf("C", "D", "E", "F", "G", "A", "B")
+private val LETTER_SEMITONES = intArrayOf(0, 2, 4, 5, 7, 9, 11)
+private val PENTA_MAJOR_LETTER_OFFSETS = intArrayOf(0, 1, 2, 4, 5)
+private val PENTA_MINOR_LETTER_OFFSETS = intArrayOf(0, 2, 3, 4, 6)
 private val INDIAN_SWARAS = arrayOf("Sa", "re", "Re", "ga", "Ga", "Ma", "ma", "Pa", "dha", "Dha", "ni", "Ni")
 private val SOLFEGE_NOTES = arrayOf("Do", "Di", "Re", "Ri", "Mi", "Fa", "Fi", "Sol", "Si", "La", "Li", "Ti")
 
 /**
+ * Spells a note (0..11) using strict Western music theory (each scale degree 1..7 uses
+ * consecutive letters A-G in alphabetical order with flats \u266D or sharps #).
+ */
+private fun spellScaleTheoryNote(
+    cleanIdx: Int,
+    rootKeyIndex: Int,
+    scaleType: ScaleType
+): String {
+    val root = rootKeyIndex.coerceIn(0, 11)
+    val isMinorLike = scaleType in setOf(
+        ScaleType.MINOR,
+        ScaleType.HARMONIC_MINOR,
+        ScaleType.MELODIC_MINOR,
+        ScaleType.DORIAN,
+        ScaleType.PHRYGIAN,
+        ScaleType.LOCRIAN,
+        ScaleType.PENTATONIC_MINOR
+    )
+
+    // Choose the root letter index (0=C, 1=D, 2=E, 3=F, 4=G, 5=A, 6=B) that minimizes accidentals
+    val rootLetterIdx = when (root) {
+        0 -> 0 // C
+        1 -> if (isMinorLike) 0 else 1 // C# for Minor/Dorian/Phrygian, Db for Major
+        2 -> 1 // D
+        3 -> if (scaleType == ScaleType.PHRYGIAN || scaleType == ScaleType.LOCRIAN) 1 else 2 // Eb (or D# for Phrygian/Locrian)
+        4 -> 2 // E
+        5 -> 3 // F
+        6 -> 3 // F#
+        7 -> 4 // G
+        8 -> if (isMinorLike && scaleType != ScaleType.DORIAN) 4 else 5 // Ab for Major/Dorian, G# for Minor/Phrygian
+        9 -> 5 // A
+        10 -> 6 // Bb
+        11 -> 6 // B
+        else -> 0
+    }
+
+    val rel = ((cleanIdx - root) % 12 + 12) % 12
+    val letterOffset = when {
+        scaleType.intervals.size == 7 -> {
+            val deg = scaleType.intervals.indexOf(rel)
+            if (deg in 0..6) deg else -1
+        }
+        scaleType == ScaleType.PENTATONIC_MAJOR -> {
+            val deg = scaleType.intervals.indexOf(rel)
+            if (deg in 0..4) PENTA_MAJOR_LETTER_OFFSETS[deg] else -1
+        }
+        scaleType == ScaleType.PENTATONIC_MINOR -> {
+            val deg = scaleType.intervals.indexOf(rel)
+            if (deg in 0..4) PENTA_MINOR_LETTER_OFFSETS[deg] else -1
+        }
+        else -> -1
+    }
+
+    if (letterOffset in 0..6) {
+        val targetLetterIdx = (rootLetterIdx + letterOffset) % 7
+        val naturalSemitone = LETTER_SEMITONES[targetLetterIdx]
+        var diff = (cleanIdx - naturalSemitone) % 12
+        if (diff > 6) diff -= 12
+        if (diff < -6) diff += 12
+        val accidental = when (diff) {
+            0 -> ""
+            1 -> "#"
+            2 -> "##"
+            -1 -> "\u266D"
+            -2 -> "\u266D\u266D"
+            else -> ""
+        }
+        return "${LETTER_NAMES[targetLetterIdx]}$accidental"
+    }
+
+    // Fallback for non-scale chromatic notes or Chromatic mode: use flats in flat keys/scales, sharps otherwise
+    val useFlats = root in setOf(1, 3, 5, 8, 10) || (root in setOf(0, 2, 7) && isMinorLike)
+    return if (useFlats) WESTERN_FLATS[cleanIdx] else WESTERN_NOTES[cleanIdx]
+}
+
+/**
  * Formats a note index (0..11) according to the selected NoteNotation.
- * For Indian Swaras, intervals are relative to the selected root key (or C when Chromatic).
+ * For Indian Swaras and Scale Theory, intervals are relative to the selected root key.
  */
 private fun formatKeyLabel(
     noteIndex: Int,
     notation: NoteNotation,
-    selectedKeyIndex: Int
+    selectedKeyIndex: Int,
+    selectedScaleType: ScaleType = ScaleType.CHROMATIC
 ): String {
     val cleanIdx = ((noteIndex % 12) + 12) % 12
     return when (notation) {
         NoteNotation.WESTERN -> WESTERN_NOTES[cleanIdx]
+        NoteNotation.WESTERN_THEORY -> spellScaleTheoryNote(cleanIdx, selectedKeyIndex, selectedScaleType)
         NoteNotation.INDIAN -> {
             val root = if (selectedKeyIndex in 0..11) selectedKeyIndex else 0
             val rel = ((cleanIdx - root) % 12 + 12) % 12
@@ -2207,11 +2305,12 @@ private fun formatKeyLabel(
 private fun frequencyToKeyName(
     hz: Float,
     notation: NoteNotation = NoteNotation.WESTERN,
-    selectedKeyIndex: Int = -1
+    selectedKeyIndex: Int = 0,
+    selectedScaleType: ScaleType = ScaleType.CHROMATIC
 ): String {
     val midi = (12.0 * log2(hz / 440.0) + 69.0).roundToInt()
     val noteIndex = ((midi % 12) + 12) % 12
-    return formatKeyLabel(noteIndex, notation, selectedKeyIndex)
+    return formatKeyLabel(noteIndex, notation, selectedKeyIndex, selectedScaleType)
 }
 
 /**
@@ -2220,10 +2319,11 @@ private fun frequencyToKeyName(
 private fun frequencyToNoteName(
     hz: Float,
     notation: NoteNotation = NoteNotation.WESTERN,
-    selectedKeyIndex: Int = -1
+    selectedKeyIndex: Int = 0,
+    selectedScaleType: ScaleType = ScaleType.CHROMATIC
 ): String {
     val midi = (12.0 * log2(hz / 440.0) + 69.0).roundToInt()
     val noteIndex = ((midi % 12) + 12) % 12
     val octave = (midi / 12) - 1
-    return "${formatKeyLabel(noteIndex, notation, selectedKeyIndex)}$octave"
+    return "${formatKeyLabel(noteIndex, notation, selectedKeyIndex, selectedScaleType)}$octave"
 }
