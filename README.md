@@ -1,4 +1,4 @@
-# Vocal Pitch Monitor (LinearPitchMonitor)
+# PitchSwara (`com.singeek.pitchswara`)
 
 A standalone, low-latency Native Android vocal pitch monitor built in Kotlin and Jetpack Compose with zero third-party audio dependencies.
 

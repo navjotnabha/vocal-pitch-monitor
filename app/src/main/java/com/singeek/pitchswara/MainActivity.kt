@@ -1,4 +1,4 @@
-package com.example.pitchmonitor
+package com.singeek.pitchswara
 
 import android.Manifest
 import android.annotation.SuppressLint

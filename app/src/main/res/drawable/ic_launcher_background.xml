@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Deep dark slate background (#0F172A) -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- Subtle inner slate glow circle (#1E293B) -->
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M54,54m-38,0a38,38 0,1 1,76 0a38,38 0,1 1,-76 0" />
+
+    <!-- Subtle horizontal pitch grid lines (#334155) inside the safe zone -->
+    <path
+        android:strokeColor="#334155"
+        android:strokeWidth="1.2"
+        android:pathData="M20,36 L88,36 M20,48 L88,48 M20,60 L88,60 M20,72 L88,72" />
+</vector>

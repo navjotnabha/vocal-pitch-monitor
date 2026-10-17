@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LinearPitchMonitor"
+rootProject.name = "PitchSwara"
 include(":app")

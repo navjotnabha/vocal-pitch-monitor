@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.pitchmonitor"
+    namespace = "com.singeek.pitchswara"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.pitchmonitor"
+        applicationId = "com.singeek.pitchswara"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

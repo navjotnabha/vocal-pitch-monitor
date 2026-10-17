@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Target reference pitch line (Amber #F59E0B) -->
+    <path
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M24,48 L84,48" />
+
+    <!-- Subtle glow behind the live pitch wave (#38BDF8 with low alpha) -->
+    <path
+        android:strokeColor="#4438BDF8"
+        android:strokeWidth="8.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,68 C33,68 36,36 45,36 C54,36 56,58 65,48 C70,43 74,48 80,48" />
+
+    <!-- Primary live vocal pitch contour wave (Sky Blue #38BDF8) -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,68 C33,68 36,36 45,36 C54,36 56,58 65,48 C70,43 74,48 80,48" />
+
+    <!-- Outer halo on live pitch locking point (#38BDF8) -->
+    <path
+        android:fillColor="#5538BDF8"
+        android:pathData="M80,48m-7.5,0a7.5,7.5 0,1 1,15 0a7.5,7.5 0,1 1,-15 0" />
+
+    <!-- Bright live pitch head indicator dot (#38BDF8 & white core) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M80,48m-4.5,0a4.5,4.5 0,1 1,9 0a4.5,4.5 0,1 1,-9 0" />
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M80,48m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+
+    <!-- Stylized tuning fork / Swara note accent at bottom-left (#22C55E) -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M24,68m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+</vector>
