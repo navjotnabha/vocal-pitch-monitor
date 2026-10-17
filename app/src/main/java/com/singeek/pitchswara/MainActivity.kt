@@ -2,6 +2,7 @@ package com.singeek.pitchswara
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -10,6 +11,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -451,6 +453,7 @@ fun LinearPitchMonitorScreen() {
     var showColoriseDialog by remember { mutableStateOf(false) }
     var selectedNotation by remember { mutableStateOf(NoteNotation.WESTERN) }
     var showNotationDialog by remember { mutableStateOf(false) }
+    var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
 
     // Customizable colors for Pitch playing line and Scale degrees (matching reference screenshot defaults)
     var pitchTraceColor by remember { mutableStateOf(TraceSkyBlue) }
@@ -503,6 +506,12 @@ fun LinearPitchMonitorScreen() {
         )
     }
 
+    if (showPrivacyPolicyDialog) {
+        PrivacyPolicyDialog(
+            onDismiss = { showPrivacyPolicyDialog = false }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -530,6 +539,7 @@ fun LinearPitchMonitorScreen() {
             onOpenColoriseDialog = { showColoriseDialog = true },
             selectedNotation = selectedNotation,
             onOpenNotationDialog = { showNotationDialog = true },
+            onOpenPrivacyPolicyDialog = { showPrivacyPolicyDialog = true },
             permissionDeniedMessage = permissionDeniedMessage
         )
 
@@ -704,6 +714,128 @@ private fun NoteNamesDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TraceSkyBlue,
+                            contentColor = BgDarkSlate
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                    ) {
+                        Text(text = "Close", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val PRIVACY_POLICY_URL =
+    "https://github.com/navjotnabha/vocal-pitch-monitor/blob/main/PRIVACY_POLICY.md"
+
+@Composable
+private fun PrivacyPolicyDialog(
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = BarSlate,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Privacy Policy",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "PitchSwara operates 100% offline on your device and never collects, saves, or shares your personal data or voice recordings.",
+                    color = GreenAccent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(BgDarkSlate, RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "1. Microphone Access (RECORD_AUDIO)",
+                        color = TraceSkyBlue,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Microphone audio is processed locally in real time in your device's memory (RAM) solely to calculate and display your vocal pitch on the graph.",
+                        color = TextPrimary,
+                        fontSize = 12.sp
+                    )
+
+                    Text(
+                        text = "2. Temporary Vocal Feedback (Rec / Play)",
+                        color = TraceSkyBlue,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "When you use the optional Rec, Stop, and Play buttons, audio is held strictly in temporary volatile RAM for immediate playback. It is never written to storage, is overwritten when a new recording starts, and is cleared when the app closes.",
+                        color = TextPrimary,
+                        fontSize = 12.sp
+                    )
+
+                    Text(
+                        text = "3. Zero Data Collection or Sharing",
+                        color = TraceSkyBlue,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "PitchSwara does not request INTERNET permission, does not connect to external servers, and contains no analytics, ads, or tracking SDKs.",
+                        color = TextPrimary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_POLICY_URL))
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BgDarkSlate,
+                            contentColor = TraceSkyBlue
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(text = "View Online", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
                     Button(
                         onClick = onDismiss,
                         colors = ButtonDefaults.buttonColors(
@@ -1082,6 +1214,7 @@ private fun TopHeaderBar(
     onOpenColoriseDialog: () -> Unit,
     selectedNotation: NoteNotation,
     onOpenNotationDialog: () -> Unit,
+    onOpenPrivacyPolicyDialog: () -> Unit,
     permissionDeniedMessage: String?
 ) {
     val keyNames = remember {
@@ -1460,6 +1593,43 @@ private fun TopHeaderBar(
                                 Text(
                                     text = "${selectedNotation.shortLabel} \u25B8",
                                     color = TraceSkyBlue,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Button 5: Privacy Policy
+                        Button(
+                            onClick = {
+                                settingsMenuExpanded = false
+                                onOpenPrivacyPolicyDialog()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BgDarkSlate,
+                                contentColor = TextPrimary
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Privacy Policy",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "\u25B8",
+                                    color = TextSecondary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
