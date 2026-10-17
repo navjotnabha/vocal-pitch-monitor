@@ -5,8 +5,10 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -75,6 +77,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -94,12 +97,14 @@ private const val DEFAULT_VISIBLE_POINTS = 280f // 1.0x speed (~3.2s window)
 private const val MIN_VISIBLE_POINTS = 70f // 4.0x fast speed (~0.8s window)
 private const val MAX_VISIBLE_POINTS = 1120f // 0.25x slow speed (~13s window)
 private const val NOISE_GATE_RMS = 0.004f
+private const val MAX_RECORD_BYTES = SAMPLE_RATE * 2 * 120 // Max 2 minutes PCM 16-bit mono
 
 private val BgDarkSlate = Color(0xFF0F172A)
 private val BarSlate = Color(0xFF1E293B)
 private val TraceSkyBlue = Color(0xFF38BDF8)
 private val GreenAccent = Color(0xFF4ADE80)
 private val AmberRef = Color(0xFFF59E0B)
+private val RedRecord = Color(0xFFEF4444)
 private val GridLineColor = Color(0xFF334155)
 private val GridLineSubtleColor = Color(0xFF1E293B)
 private val TextPrimary = Color(0xFFF8FAFC)
@@ -137,6 +142,13 @@ fun LinearPitchMonitorScreen() {
     var micLevel by remember { mutableFloatStateOf(0f) }
     var permissionDeniedMessage by remember { mutableStateOf<String?>(null) }
 
+    // Voice feedback recording & playback states
+    var isCapturingClip by remember { mutableStateOf(false) }
+    var isPlayingClip by remember { mutableStateOf(false) }
+    var hasRecordedClip by remember { mutableStateOf(false) }
+    val recordedPcmStream = remember { ByteArrayOutputStream() }
+    val capturingClipState by rememberUpdatedState(isCapturingClip)
+
     val pitchHistory = remember {
         mutableStateListOf<Float?>().apply {
             repeat(HISTORY_SIZE) { add(null) }
@@ -173,6 +185,8 @@ fun LinearPitchMonitorScreen() {
                 }
                 Lifecycle.Event.ON_STOP -> {
                     isRecording = false
+                    isCapturingClip = false
+                    isPlayingClip = false
                 }
                 else -> {}
             }
@@ -181,6 +195,68 @@ fun LinearPitchMonitorScreen() {
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             isRecording = false
+            isCapturingClip = false
+            isPlayingClip = false
+        }
+    }
+
+    // Playback coroutine for listening to recorded vocal feedback
+    LaunchedEffect(isPlayingClip) {
+        if (!isPlayingClip) return@LaunchedEffect
+
+        val pcmBytes = synchronized(recordedPcmStream) {
+            recordedPcmStream.toByteArray()
+        }
+        if (pcmBytes.isEmpty()) {
+            isPlayingClip = false
+            return@LaunchedEffect
+        }
+
+        withContext(Dispatchers.IO) {
+            val minOutBuffer = AudioTrack.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(4096)
+
+            val audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(minOutBuffer)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+
+            try {
+                audioTrack.play()
+                var offset = 0
+                val chunkSize = 2048
+                while (isActive && isPlayingClip && offset < pcmBytes.size) {
+                    val toWrite = minOf(chunkSize, pcmBytes.size - offset)
+                    val written = audioTrack.write(pcmBytes, offset, toWrite)
+                    if (written <= 0) break
+                    offset += written
+                }
+            } finally {
+                try {
+                    audioTrack.stop()
+                } catch (_: Exception) {
+                }
+                audioTrack.release()
+                withContext(Dispatchers.Main) {
+                    isPlayingClip = false
+                }
+            }
         }
     }
 
@@ -217,6 +293,7 @@ fun LinearPitchMonitorScreen() {
             }
 
             val hopBuffer = ShortArray(HOP_SIZE)
+            val pcmByteChunk = ByteArray(HOP_SIZE * 2)
             val floatBuffer = FloatArray(FRAME_SIZE)
             val prefixSq = FloatArray(FRAME_SIZE + 1)
             var samplesFilled = 0
@@ -231,6 +308,20 @@ fun LinearPitchMonitorScreen() {
                 while (isActive && isRecording) {
                     val readCount = audioRecord.read(hopBuffer, 0, HOP_SIZE)
                     if (readCount <= 0) continue
+
+                    // Append PCM 16-bit little-endian samples when user is recording feedback clip
+                    if (capturingClipState) {
+                        for (i in 0 until readCount) {
+                            val s = hopBuffer[i].toInt()
+                            pcmByteChunk[i * 2] = (s and 0xFF).toByte()
+                            pcmByteChunk[i * 2 + 1] = ((s shr 8) and 0xFF).toByte()
+                        }
+                        synchronized(recordedPcmStream) {
+                            if (recordedPcmStream.size() + readCount * 2 <= MAX_RECORD_BYTES) {
+                                recordedPcmStream.write(pcmByteChunk, 0, readCount * 2)
+                            }
+                        }
+                    }
 
                     // Shift sliding window left by readCount and append new samples
                     if (samplesFilled < FRAME_SIZE) {
@@ -342,6 +433,9 @@ fun LinearPitchMonitorScreen() {
 
     // Selected musical key for graph bars: -1 = Chromatic (all 12 keys), 0..11 = C..B
     var selectedKeyIndex by remember { mutableIntStateOf(-1) }
+    // Settings toggles (both off by default)
+    var showMicLevel by remember { mutableStateOf(false) }
+    var highlightPerfect by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -349,12 +443,16 @@ fun LinearPitchMonitorScreen() {
             .background(BgDarkSlate)
             .navigationBarsPadding()
     ) {
-        // Top Header with Key Picker Dropdown
+        // Top Header with Key Picker Dropdown & Context Menu
         TopHeaderBar(
             currentHz = currentHz,
             micLevel = micLevel,
             selectedKeyIndex = selectedKeyIndex,
             onSelectKey = { selectedKeyIndex = it },
+            showMicLevel = showMicLevel,
+            onToggleShowMicLevel = { showMicLevel = !showMicLevel },
+            highlightPerfect = highlightPerfect,
+            onToggleHighlightPerfect = { highlightPerfect = !highlightPerfect },
             permissionDeniedMessage = permissionDeniedMessage
         )
 
@@ -368,7 +466,134 @@ fun LinearPitchMonitorScreen() {
             LinearPitchCanvas(
                 pitchHistory = pitchHistory,
                 currentHz = currentHz,
-                selectedKeyIndex = selectedKeyIndex
+                selectedKeyIndex = selectedKeyIndex,
+                highlightPerfect = highlightPerfect
+            )
+
+            // Compact bottom Record, Stop, and Play buttons for vocal feedback
+            BottomFeedbackBar(
+                isCapturingClip = isCapturingClip,
+                isPlayingClip = isPlayingClip,
+                hasRecordedClip = hasRecordedClip,
+                onRecord = {
+                    isPlayingClip = false
+                    synchronized(recordedPcmStream) {
+                        recordedPcmStream.reset()
+                    }
+                    hasRecordedClip = false
+                    isCapturingClip = true
+                },
+                onStop = {
+                    if (isCapturingClip) {
+                        isCapturingClip = false
+                        val recordedSize = synchronized(recordedPcmStream) {
+                            recordedPcmStream.size()
+                        }
+                        hasRecordedClip = recordedSize > 0
+                    }
+                    if (isPlayingClip) {
+                        isPlayingClip = false
+                    }
+                },
+                onPlay = {
+                    if (isCapturingClip) {
+                        isCapturingClip = false
+                    }
+                    val recordedSize = synchronized(recordedPcmStream) {
+                        recordedPcmStream.size()
+                    }
+                    if (recordedSize > 0) {
+                        hasRecordedClip = true
+                        isPlayingClip = true
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 10.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun BottomFeedbackBar(
+    isCapturingClip: Boolean,
+    isPlayingClip: Boolean,
+    hasRecordedClip: Boolean,
+    onRecord: () -> Unit,
+    onStop: () -> Unit,
+    onPlay: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .background(
+                color = BarSlate.copy(alpha = 0.92f),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Record Button
+        Button(
+            onClick = onRecord,
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isCapturingClip) RedRecord else BgDarkSlate,
+                contentColor = if (isCapturingClip) TextPrimary else RedRecord
+            )
+        ) {
+            Text(
+                text = if (isCapturingClip) "\u25CF Rec..." else "\u25CF Rec",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Stop Button
+        val canStop = isCapturingClip || isPlayingClip
+        Button(
+            onClick = onStop,
+            enabled = canStop,
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BgDarkSlate,
+                contentColor = AmberRef,
+                disabledContainerColor = BgDarkSlate.copy(alpha = 0.45f),
+                disabledContentColor = TextSecondary.copy(alpha = 0.45f)
+            )
+        ) {
+            Text(
+                text = "\u25A0 Stop",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        // Play Button
+        val canPlay = hasRecordedClip || isCapturingClip
+        Button(
+            onClick = onPlay,
+            enabled = canPlay,
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isPlayingClip) GreenAccent.copy(alpha = 0.25f) else BgDarkSlate,
+                contentColor = if (isPlayingClip) GreenAccent else TraceSkyBlue,
+                disabledContainerColor = BgDarkSlate.copy(alpha = 0.45f),
+                disabledContentColor = TextSecondary.copy(alpha = 0.45f)
+            )
+        ) {
+            Text(
+                text = if (isPlayingClip) "\u25B6 Playing" else "\u25B6 Play",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
     }
@@ -380,6 +605,10 @@ private fun TopHeaderBar(
     micLevel: Float,
     selectedKeyIndex: Int,
     onSelectKey: (Int) -> Unit,
+    showMicLevel: Boolean,
+    onToggleShowMicLevel: () -> Unit,
+    highlightPerfect: Boolean,
+    onToggleHighlightPerfect: () -> Unit,
     permissionDeniedMessage: String?
 ) {
     val keyNames = remember {
@@ -513,11 +742,36 @@ private fun TopHeaderBar(
                 }
             }
 
-            // Right Slot (fixed weight 1f, houses Context Menu icon on top right)
-            Box(
+            // Right Slot (fixed weight 1f, houses optional little Mic Level bar + Context Menu icon)
+            Row(
                 modifier = Modifier.weight(1f),
-                contentAlignment = Alignment.CenterEnd
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (showMicLevel) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        modifier = Modifier.padding(end = 10.dp)
+                    ) {
+                        Text(
+                            text = "MIC",
+                            color = TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { micLevel.coerceIn(0f, 1f) },
+                            modifier = Modifier
+                                .width(52.dp)
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = GreenAccent,
+                            trackColor = BgDarkSlate
+                        )
+                    }
+                }
+
                 Box {
                     Button(
                         onClick = { settingsMenuExpanded = true },
@@ -543,38 +797,81 @@ private fun TopHeaderBar(
                         onDismissRequest = { settingsMenuExpanded = false },
                         modifier = Modifier
                             .background(BarSlate)
-                            .width(240.dp)
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .width(230.dp)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Text(
                             text = "SETTINGS",
                             color = TextSecondary,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = "Microphone Input Level",
-                            color = TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 4.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { micLevel.coerceIn(0f, 1f) },
+
+                        // Toggle 1: Show Mic Level (OFF by default)
+                        Button(
+                            onClick = onToggleShowMicLevel,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(10.dp)
-                                .clip(RoundedCornerShape(5.dp)),
-                            color = GreenAccent,
-                            trackColor = BgDarkSlate
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = String.format(Locale.US, "Level: %d%%", (micLevel * 100f).roundToInt().coerceIn(0, 100)),
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
+                                .height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (showMicLevel) GreenAccent.copy(alpha = 0.2f) else BgDarkSlate,
+                                contentColor = if (showMicLevel) GreenAccent else TextPrimary
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Show Mic Level",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (showMicLevel) "ON" else "OFF",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Toggle 2: Highlight Perfect (OFF by default)
+                        Button(
+                            onClick = onToggleHighlightPerfect,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (highlightPerfect) GreenAccent.copy(alpha = 0.2f) else BgDarkSlate,
+                                contentColor = if (highlightPerfect) GreenAccent else TextPrimary
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Highlight Perfect",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (highlightPerfect) "ON" else "OFF",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -595,7 +892,8 @@ private fun TopHeaderBar(
 private fun LinearPitchCanvas(
     pitchHistory: List<Float?>,
     currentHz: Float?,
-    selectedKeyIndex: Int
+    selectedKeyIndex: Int,
+    highlightPerfect: Boolean
 ) {
     // Center MIDI note of the viewport (default 50f = D3, comfortable vocal middle)
     var centerMidi by remember { mutableFloatStateOf(50f) }
@@ -678,6 +976,15 @@ private fun LinearPitchCanvas(
         Paint().apply {
             color = android.graphics.Color.parseColor("#38BDF8")
             textSize = 34f
+            isAntiAlias = true
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+    }
+
+    val perfectKeyPaint = remember {
+        Paint().apply {
+            color = android.graphics.Color.parseColor("#22C55E")
+            textSize = 36f
             isAntiAlias = true
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
@@ -769,6 +1076,27 @@ private fun LinearPitchCanvas(
                 return height - ((midi - minMidi) / visibleSemitones) * height
             }
 
+            // Helper: check if a MIDI value lands perfectly on an active graph note line (within ±0.18 semitones)
+            fun isPerfectMidi(midi: Float): Boolean {
+                val nearestMidi = midi.roundToInt()
+                if (abs(midi - nearestMidi) > 0.18f) return false
+                val noteIdx = ((nearestMidi % 12) + 12) % 12
+                return if (selectedKeyIndex in 0..11) {
+                    val relInterval = ((noteIdx - selectedKeyIndex) % 12 + 12) % 12
+                    relInterval in scaleIntervals
+                } else {
+                    true
+                }
+            }
+
+            val currentMidiVal = currentHz?.let { hzToMidi(it) }
+            val isCurrentlyPerfect = highlightPerfect && currentMidiVal != null && isPerfectMidi(currentMidiVal)
+            val perfectLockedMidi = if (isCurrentlyPerfect && currentMidiVal != null) {
+                currentMidiVal.roundToInt()
+            } else {
+                null
+            }
+
             // 1. Draw horizontal bands & grid lines only for the active scale/key bars
             val firstNote = floor(minMidi).toInt()
             val lastNote = ceil(maxMidi).toInt()
@@ -791,10 +1119,17 @@ private fun LinearPitchCanvas(
                 } else {
                     noteIndex == 0
                 }
+                val isLockedPerfectRow = (perfectLockedMidi != null && midi == perfectLockedMidi)
 
                 // Subtle piano-roll row shading for sharp keys in Chromatic mode,
-                // or root key highlight when a specific key is selected
-                if (selectedKeyIndex == -1 && isSharp) {
+                // root key highlight when a specific key is selected, or green glow when locked perfectly
+                if (isLockedPerfectRow) {
+                    drawRect(
+                        color = GreenAccent.copy(alpha = 0.14f),
+                        topLeft = Offset(0f, y - rowHeight / 2f),
+                        size = androidx.compose.ui.geometry.Size(width, rowHeight)
+                    )
+                } else if (selectedKeyIndex == -1 && isSharp) {
                     drawRect(
                         color = Color(0xFF131D31),
                         topLeft = Offset(0f, y - rowHeight / 2f),
@@ -811,19 +1146,25 @@ private fun LinearPitchCanvas(
                 // Grid line at the center of each active key bar
                 drawLine(
                     color = when {
+                        isLockedPerfectRow -> GreenAccent
                         isRootKey -> Color(0xFF475569)
                         selectedKeyIndex == -1 && isSharp -> GridLineSubtleColor
                         else -> GridLineColor
                     },
                     start = Offset(0f, y),
                     end = Offset(width, y),
-                    strokeWidth = if (isRootKey) 2.5f else 1.5f
+                    strokeWidth = when {
+                        isLockedPerfectRow -> 3.5f
+                        isRootKey -> 2.5f
+                        else -> 1.5f
+                    }
                 )
 
                 // Draw key label on the left edge
                 if (selectedKeyIndex in 0..11 || !isSharp || rowHeight >= 26f) {
                     val label = if (isRootKey) "$keyName ($keyName$octave)" else "$keyName$octave"
                     val paint = when {
+                        isLockedPerfectRow -> perfectKeyPaint
                         isRootKey -> octaveLabelPaint
                         selectedKeyIndex == -1 && isSharp -> sharpLabelPaint
                         else -> naturalLabelPaint
@@ -845,13 +1186,16 @@ private fun LinearPitchCanvas(
                 val stepX = if (visibleCount > 1) width / (visibleCount - 1).toFloat() else width
 
                 val path = Path()
+                val perfectPath = Path()
                 var isPenDown = false
+                var isPerfectPenDown = false
                 var prevX = 0f
                 var prevY = 0f
                 var prevMidi = 0f
                 var lastActiveX = 0f
                 var lastActiveY = 0f
                 var lastActiveHz: Float? = null
+                var lastActivePerfect = false
 
                 for (j in 0 until visibleCount) {
                     val hz = pitchHistory[startIndex + j]
@@ -859,17 +1203,42 @@ private fun LinearPitchCanvas(
                         val x = j * stepX
                         val midi = hzToMidi(hz)
                         val y = midiToY(midi)
+                        val pointPerfect = highlightPerfect && isPerfectMidi(midi)
+
                         if (!isPenDown) {
                             path.moveTo(x, y)
                             isPenDown = true
+                            if (pointPerfect) {
+                                perfectPath.moveTo(x, y)
+                                isPerfectPenDown = true
+                            }
                         } else if (abs(midi - prevMidi) > 2.5f) {
                             // Lift and restart stroke on large note jumps so it never draws a vertical spike
                             path.lineTo(prevX, prevY)
                             path.moveTo(x, y)
+                            if (isPerfectPenDown) {
+                                perfectPath.lineTo(prevX, prevY)
+                                isPerfectPenDown = false
+                            }
+                            if (pointPerfect) {
+                                perfectPath.moveTo(x, y)
+                                isPerfectPenDown = true
+                            }
                         } else {
                             val midX = (prevX + x) * 0.5f
                             val midY = (prevY + y) * 0.5f
                             path.quadraticTo(prevX, prevY, midX, midY)
+
+                            if (pointPerfect) {
+                                if (!isPerfectPenDown) {
+                                    perfectPath.moveTo(prevX, prevY)
+                                    isPerfectPenDown = true
+                                }
+                                perfectPath.quadraticTo(prevX, prevY, midX, midY)
+                            } else if (isPerfectPenDown) {
+                                perfectPath.lineTo(prevX, prevY)
+                                isPerfectPenDown = false
+                            }
                         }
                         prevX = x
                         prevY = y
@@ -877,17 +1246,48 @@ private fun LinearPitchCanvas(
                         lastActiveX = x
                         lastActiveY = y
                         lastActiveHz = hz
+                        lastActivePerfect = pointPerfect
                     } else {
                         if (isPenDown) {
                             path.lineTo(prevX, prevY)
                             isPenDown = false
+                        }
+                        if (isPerfectPenDown) {
+                            perfectPath.lineTo(prevX, prevY)
+                            isPerfectPenDown = false
                         }
                     }
                 }
                 if (isPenDown) {
                     path.lineTo(prevX, prevY)
                 }
+                if (isPerfectPenDown) {
+                    perfectPath.lineTo(prevX, prevY)
+                }
 
+                // Draw contrasting green highlight halo behind the sky-blue playing line on perfect segments
+                if (highlightPerfect) {
+                    drawPath(
+                        path = perfectPath,
+                        color = GreenAccent.copy(alpha = 0.45f),
+                        style = Stroke(
+                            width = 20f,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                    drawPath(
+                        path = perfectPath,
+                        color = GreenAccent,
+                        style = Stroke(
+                            width = 12f,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                }
+
+                // Primary playing line always keeps its distinct sky-blue color on top
                 drawPath(
                     path = path,
                     color = TraceSkyBlue,
@@ -901,20 +1301,33 @@ private fun LinearPitchCanvas(
                 // Draw live key indicator badge at the most recent active point
                 if (lastActiveHz != null) {
                     val clampedY = lastActiveY.coerceIn(18f, height - 18f)
+                    if (lastActivePerfect) {
+                        drawCircle(
+                            color = GreenAccent.copy(alpha = 0.4f),
+                            radius = 18f,
+                            center = Offset(lastActiveX, clampedY)
+                        )
+                        drawCircle(
+                            color = GreenAccent,
+                            radius = 13f,
+                            center = Offset(lastActiveX, clampedY)
+                        )
+                    }
                     drawCircle(
                         color = TraceSkyBlue,
-                        radius = 9f,
+                        radius = 8.5f,
                         center = Offset(lastActiveX, clampedY)
                     )
                     val liveKeyText = frequencyToKeyName(lastActiveHz)
-                    val textWidth = liveKeyPaint.measureText(liveKeyText)
+                    val activeBadgePaint = if (lastActivePerfect) perfectKeyPaint else liveKeyPaint
+                    val textWidth = activeBadgePaint.measureText(liveKeyText)
                     val badgeX = (lastActiveX - textWidth - 16f).coerceAtLeast(16f)
                     val badgeY = if (clampedY > 45f) clampedY - 14f else clampedY + 36f
                     drawContext.canvas.nativeCanvas.drawText(
                         liveKeyText,
                         badgeX,
                         badgeY,
-                        liveKeyPaint
+                        activeBadgePaint
                     )
                 }
             }
