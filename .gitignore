@@ -1,0 +1,31 @@
+# Gradle & build outputs
+.gradle/
+build/
+app/build/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Local configuration (SDK paths, machine-specific settings)
+local.properties
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+.navigation/
+.externalNativeBuild/
+.cxx/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keystore files
+*.jks
+*.keystore

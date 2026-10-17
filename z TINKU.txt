@@ -1,0 +1,4 @@
+command for running :
+
+.\gradlew.bat installDebug
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" shell am start -n com.example.pitchmonitor/.MainActivity
