@@ -17,6 +17,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -30,9 +32,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -40,6 +46,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -65,12 +73,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -431,11 +441,67 @@ fun LinearPitchMonitorScreen() {
         }
     }
 
-    // Selected musical key for graph bars: -1 = Chromatic (all 12 keys), 0..11 = C..B
-    var selectedKeyIndex by remember { mutableIntStateOf(-1) }
-    // Settings toggles (both off by default)
+    // Selected musical root key (0..11 = C..B) and scale/mode (default Chromatic = all 12 notes)
+    var selectedKeyIndex by remember { mutableIntStateOf(0) }
+    var selectedScaleType by remember { mutableStateOf(ScaleType.CHROMATIC) }
+    // Settings toggles (all off by default, Western notation by default)
     var showMicLevel by remember { mutableStateOf(false) }
     var highlightPerfect by remember { mutableStateOf(false) }
+    var coloriseNotesEnabled by remember { mutableStateOf(false) }
+    var showColoriseDialog by remember { mutableStateOf(false) }
+    var selectedNotation by remember { mutableStateOf(NoteNotation.WESTERN) }
+    var showNotationDialog by remember { mutableStateOf(false) }
+
+    // Customizable colors for Pitch playing line and Scale degrees (matching reference screenshot defaults)
+    var pitchTraceColor by remember { mutableStateOf(TraceSkyBlue) }
+    val scaleDegreeColors = remember {
+        mutableStateListOf(
+            Color(0xFFFF0000), // 0: 1st Tonic (Red)
+            Color(0xFF00FF00), // 1: 2nd Supertonic (Lime Green)
+            Color(0xFFFF9900), // 2: 3rd Mediant (Orange)
+            Color(0xFF0026FF), // 3: 4th Subdominant (Blue)
+            Color(0xFFFFFF00), // 4: 5th Dominant (Yellow)
+            Color(0xFFADD8E6), // 5: 6th Subtonic (Light Blue)
+            Color(0xFFADD8E6), // 6: 7th Leading (Light Blue)
+            Color(0xFF2B3544)  // 7: Semitone (Dark Slate / Charcoal)
+        )
+    }
+
+    if (showColoriseDialog) {
+        ColoriseNotesDialog(
+            coloriseNotesEnabled = coloriseNotesEnabled,
+            onToggleColoriseNotes = { coloriseNotesEnabled = it },
+            pitchTraceColor = pitchTraceColor,
+            onChangePitchTraceColor = { pitchTraceColor = it },
+            scaleDegreeColors = scaleDegreeColors,
+            onChangeScaleDegreeColor = { index, color ->
+                scaleDegreeColors[index] = color
+            },
+            onResetDefaults = {
+                pitchTraceColor = TraceSkyBlue
+                scaleDegreeColors[0] = Color(0xFFFF0000)
+                scaleDegreeColors[1] = Color(0xFF00FF00)
+                scaleDegreeColors[2] = Color(0xFFFF9900)
+                scaleDegreeColors[3] = Color(0xFF0026FF)
+                scaleDegreeColors[4] = Color(0xFFFFFF00)
+                scaleDegreeColors[5] = Color(0xFFADD8E6)
+                scaleDegreeColors[6] = Color(0xFFADD8E6)
+                scaleDegreeColors[7] = Color(0xFF2B3544)
+            },
+            onDismiss = { showColoriseDialog = false }
+        )
+    }
+
+    if (showNotationDialog) {
+        NoteNamesDialog(
+            selectedNotation = selectedNotation,
+            onSelectNotation = {
+                selectedNotation = it
+                showNotationDialog = false
+            },
+            onDismiss = { showNotationDialog = false }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -443,16 +509,27 @@ fun LinearPitchMonitorScreen() {
             .background(BgDarkSlate)
             .navigationBarsPadding()
     ) {
-        // Top Header with Key Picker Dropdown & Context Menu
+        // Top Header with Key & Scale Picker Dropdowns & Context Menu
         TopHeaderBar(
             currentHz = currentHz,
             micLevel = micLevel,
             selectedKeyIndex = selectedKeyIndex,
-            onSelectKey = { selectedKeyIndex = it },
+            onSelectKey = { newKey ->
+                selectedKeyIndex = newKey
+                if (selectedScaleType == ScaleType.CHROMATIC) {
+                    selectedScaleType = ScaleType.MAJOR
+                }
+            },
+            selectedScaleType = selectedScaleType,
+            onSelectScaleType = { selectedScaleType = it },
             showMicLevel = showMicLevel,
             onToggleShowMicLevel = { showMicLevel = !showMicLevel },
             highlightPerfect = highlightPerfect,
             onToggleHighlightPerfect = { highlightPerfect = !highlightPerfect },
+            coloriseNotesEnabled = coloriseNotesEnabled,
+            onOpenColoriseDialog = { showColoriseDialog = true },
+            selectedNotation = selectedNotation,
+            onOpenNotationDialog = { showNotationDialog = true },
             permissionDeniedMessage = permissionDeniedMessage
         )
 
@@ -467,7 +544,12 @@ fun LinearPitchMonitorScreen() {
                 pitchHistory = pitchHistory,
                 currentHz = currentHz,
                 selectedKeyIndex = selectedKeyIndex,
-                highlightPerfect = highlightPerfect
+                selectedScaleType = selectedScaleType,
+                highlightPerfect = highlightPerfect,
+                coloriseNotesEnabled = coloriseNotesEnabled,
+                pitchTraceColor = pitchTraceColor,
+                scaleDegreeColors = scaleDegreeColors,
+                selectedNotation = selectedNotation
             )
 
             // Compact bottom Record, Stop, and Play buttons for vocal feedback
@@ -511,6 +593,390 @@ fun LinearPitchMonitorScreen() {
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 10.dp)
             )
+        }
+    }
+}
+
+enum class ScaleType(val label: String, val intervals: List<Int>) {
+    CHROMATIC("Chromatic", listOf(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)),
+    MAJOR("Major", listOf(0, 2, 4, 5, 7, 9, 11)),
+    MINOR("Minor", listOf(0, 2, 3, 5, 7, 8, 10)),
+    HARMONIC_MINOR("Harmonic Minor", listOf(0, 2, 3, 5, 7, 8, 11)),
+    MELODIC_MINOR("Melodic Minor", listOf(0, 2, 3, 5, 7, 9, 11)),
+    DORIAN("Dorian", listOf(0, 2, 3, 5, 7, 9, 10)),
+    PHRYGIAN("Phrygian", listOf(0, 1, 3, 5, 7, 8, 10)),
+    LYDIAN("Lydian", listOf(0, 2, 4, 6, 7, 9, 11)),
+    MIXOLYDIAN("Mixolydian", listOf(0, 2, 4, 5, 7, 9, 10)),
+    LOCRIAN("Locrian", listOf(0, 1, 3, 5, 6, 8, 10)),
+    PENTATONIC_MAJOR("Major Pentatonic", listOf(0, 2, 4, 7, 9)),
+    PENTATONIC_MINOR("Minor Pentatonic", listOf(0, 3, 5, 7, 10))
+}
+
+enum class NoteNotation(val shortLabel: String, val fullTitle: String, val examples: String) {
+    WESTERN("Western", "Western (C, C#, D...)", "C, C#, D, D#, E, F, F#, G, G#, A, A#, B"),
+    INDIAN("Indian", "Indian Swaras (Sa, Re, Ga...)", "Sa, re, Re, ga, Ga, Ma, ma, Pa, dha, Dha, ni, Ni"),
+    SOLFEGE("Solf\u00E8ge", "Solf\u00E8ge (Do, Re, Mi...)", "Do, Di, Re, Ri, Mi, Fa, Fi, Sol, Si, La, Li, Ti")
+}
+
+@Composable
+private fun NoteNamesDialog(
+    selectedNotation: NoteNotation,
+    onSelectNotation: (NoteNotation) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = BarSlate,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+            ) {
+                Text(
+                    text = "Note Names / Notation",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Choose how musical notes are displayed on the pitch graph and live header.",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                for (notation in NoteNotation.entries) {
+                    val isSelected = notation == selectedNotation
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (isSelected) GreenAccent.copy(alpha = 0.16f) else BgDarkSlate
+                            )
+                            .border(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) GreenAccent else GridLineColor,
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .clickable { onSelectNotation(notation) }
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = notation.fullTitle,
+                                color = if (isSelected) GreenAccent else TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (isSelected) {
+                                Text(
+                                    text = "\u2713",
+                                    color = GreenAccent,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = notation.examples,
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TraceSkyBlue,
+                            contentColor = BgDarkSlate
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                    ) {
+                        Text(text = "Close", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColoriseNotesDialog(
+    coloriseNotesEnabled: Boolean,
+    onToggleColoriseNotes: (Boolean) -> Unit,
+    pitchTraceColor: Color,
+    onChangePitchTraceColor: (Color) -> Unit,
+    scaleDegreeColors: List<Color>,
+    onChangeScaleDegreeColor: (Int, Color) -> Unit,
+    onResetDefaults: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scaleLabels = remember {
+        listOf(
+            "1st Tonic",
+            "2nd Supertonic",
+            "3rd Mediant",
+            "4th Subdominant",
+            "5th Dominant",
+            "6th Subtonic",
+            "7th Leading",
+            "Semitone"
+        )
+    }
+
+    val colorPalette = remember {
+        listOf(
+            Color(0xFFFF0000), // Red
+            Color(0xFF00FF00), // Lime Green
+            Color(0xFFFF9900), // Orange
+            Color(0xFF0026FF), // Royal Blue
+            Color(0xFFFFFF00), // Yellow
+            Color(0xFFADD8E6), // Light Blue
+            Color(0xFF38BDF8), // Sky Blue
+            Color(0xFF4ADE80), // Emerald Green
+            Color(0xFFF43F5E), // Rose Pink
+            Color(0xFFA855F7), // Purple
+            Color(0xFFEC4899), // Magenta
+            Color(0xFF14B8A6), // Teal
+            Color(0xFFF59E0B), // Amber
+            Color(0xFFF8FAFC), // White
+            Color(0xFF64748B), // Slate Gray
+            Color(0xFF2B3544)  // Dark Semitone Charcoal
+        )
+    }
+
+    // -1 = editing Pitch line color, 0..7 = editing Scale degree color, null = no picker open
+    var activePickerTarget by remember { mutableStateOf<Int?>(null) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = BarSlate,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Colorise Notes",
+                        color = TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Switch(
+                        checked = coloriseNotesEnabled,
+                        onCheckedChange = onToggleColoriseNotes,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = BgDarkSlate,
+                            checkedTrackColor = GreenAccent,
+                            uncheckedThumbColor = TextSecondary,
+                            uncheckedTrackColor = BgDarkSlate
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Color",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Pitch line color row
+                ColorRowItem(
+                    label = "Pitch",
+                    color = pitchTraceColor,
+                    isSelected = activePickerTarget == -1,
+                    onClick = {
+                        activePickerTarget = if (activePickerTarget == -1) null else -1
+                    }
+                )
+                if (activePickerTarget == -1) {
+                    ColorPaletteGrid(
+                        palette = colorPalette,
+                        selectedColor = pitchTraceColor,
+                        onSelectColor = { chosen ->
+                            onChangePitchTraceColor(chosen)
+                            activePickerTarget = null
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "\u2303   Scale",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                for (i in scaleLabels.indices) {
+                    ColorRowItem(
+                        label = scaleLabels[i],
+                        color = scaleDegreeColors[i],
+                        isSelected = activePickerTarget == i,
+                        onClick = {
+                            activePickerTarget = if (activePickerTarget == i) null else i
+                        }
+                    )
+                    if (activePickerTarget == i) {
+                        ColorPaletteGrid(
+                            palette = colorPalette,
+                            selectedColor = scaleDegreeColors[i],
+                            onSelectColor = { chosen ->
+                                onChangeScaleDegreeColor(i, chosen)
+                                activePickerTarget = null
+                            }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = onResetDefaults,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BgDarkSlate,
+                            contentColor = TextSecondary
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(text = "Reset", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TraceSkyBlue,
+                            contentColor = BgDarkSlate
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                    ) {
+                        Text(text = "Done", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColorRowItem(
+    label: String,
+    color: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) BgDarkSlate.copy(alpha = 0.7f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Box(
+            modifier = Modifier
+                .width(78.dp)
+                .height(24.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(color)
+                .border(
+                    width = if (isSelected) 2.dp else 1.dp,
+                    color = if (isSelected) TextPrimary else GridLineColor,
+                    shape = RoundedCornerShape(4.dp)
+                )
+        )
+    }
+}
+
+@Composable
+private fun ColorPaletteGrid(
+    palette: List<Color>,
+    selectedColor: Color,
+    onSelectColor: (Color) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .background(BgDarkSlate, RoundedCornerShape(10.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        for (rowColors in palette.chunked(8)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                for (swatch in rowColors) {
+                    val isPicked = swatch == selectedColor
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(swatch)
+                            .border(
+                                width = if (isPicked) 2.5.dp else 1.dp,
+                                color = if (isPicked) TextPrimary else GridLineColor,
+                                shape = CircleShape
+                            )
+                            .clickable { onSelectColor(swatch) }
+                    )
+                }
+            }
         }
     }
 }
@@ -605,16 +1071,23 @@ private fun TopHeaderBar(
     micLevel: Float,
     selectedKeyIndex: Int,
     onSelectKey: (Int) -> Unit,
+    selectedScaleType: ScaleType,
+    onSelectScaleType: (ScaleType) -> Unit,
     showMicLevel: Boolean,
     onToggleShowMicLevel: () -> Unit,
     highlightPerfect: Boolean,
     onToggleHighlightPerfect: () -> Unit,
+    coloriseNotesEnabled: Boolean,
+    onOpenColoriseDialog: () -> Unit,
+    selectedNotation: NoteNotation,
+    onOpenNotationDialog: () -> Unit,
     permissionDeniedMessage: String?
 ) {
     val keyNames = remember {
         arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
     }
     var keyMenuExpanded by remember { mutableStateOf(false) }
+    var scaleMenuExpanded by remember { mutableStateOf(false) }
     var settingsMenuExpanded by remember { mutableStateOf(false) }
 
     Column(
@@ -628,7 +1101,7 @@ private fun TopHeaderBar(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left Slot (fixed weight 1f so content changes never push the center dropdown)
+            // Left Slot (fixed weight 1f so content changes never push the center dropdowns)
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.Start
@@ -643,7 +1116,7 @@ private fun TopHeaderBar(
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
                         text = if (currentHz != null) {
-                            frequencyToKeyName(currentHz)
+                            frequencyToKeyName(currentHz, selectedNotation, selectedKeyIndex)
                         } else {
                             "--"
                         },
@@ -654,7 +1127,7 @@ private fun TopHeaderBar(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (currentHz != null) {
-                            frequencyToNoteName(currentHz)
+                            frequencyToNoteName(currentHz, selectedNotation, selectedKeyIndex)
                         } else {
                             ""
                         },
@@ -666,9 +1139,9 @@ private fun TopHeaderBar(
                 }
             }
 
-            // Center Slot (fixed width so the Key Picker never flicks left or right)
+            // Center Slot (fixed width so the Key & Scale Pickers never flick left or right)
             Column(
-                modifier = Modifier.width(144.dp),
+                modifier = Modifier.width(182.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
@@ -678,65 +1151,102 @@ private fun TopHeaderBar(
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Box {
-                    val selectedLabel = if (selectedKeyIndex in 0..11) {
-                        "Key: ${keyNames[selectedKeyIndex]} \u25BE"
-                    } else {
-                        "Chromatic \u25BE"
-                    }
-                    Button(
-                        onClick = { keyMenuExpanded = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BgDarkSlate,
-                            contentColor = TraceSkyBlue
-                        )
-                    ) {
-                        Text(
-                            text = selectedLabel,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Root Key Dropdown (C, C#, D, ..., B)
+                    Box(modifier = Modifier.width(58.dp)) {
+                        val safeKeyIdx = selectedKeyIndex.coerceIn(0, 11)
+                        Button(
+                            onClick = { keyMenuExpanded = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(36.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BgDarkSlate,
+                                contentColor = TraceSkyBlue
+                            )
+                        ) {
+                            Text(
+                                text = "${keyNames[safeKeyIdx]} \u25BE",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = keyMenuExpanded,
+                            onDismissRequest = { keyMenuExpanded = false },
+                            modifier = Modifier.background(BarSlate)
+                        ) {
+                            for (i in keyNames.indices) {
+                                val kName = keyNames[i]
+                                val isSelected = safeKeyIdx == i
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = kName,
+                                            color = if (isSelected) TraceSkyBlue else TextPrimary,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        onSelectKey(i)
+                                        keyMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
                     }
 
-                    DropdownMenu(
-                        expanded = keyMenuExpanded,
-                        onDismissRequest = { keyMenuExpanded = false },
-                        modifier = Modifier.background(BarSlate)
-                    ) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = "Chromatic (All Keys)",
-                                    color = if (selectedKeyIndex == -1) TraceSkyBlue else TextPrimary,
-                                    fontWeight = if (selectedKeyIndex == -1) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            onClick = {
-                                onSelectKey(-1)
-                                keyMenuExpanded = false
-                            }
-                        )
-                        for (i in keyNames.indices) {
-                            val kName = keyNames[i]
-                            val isSelected = selectedKeyIndex == i
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = "Key of $kName",
-                                        color = if (isSelected) TraceSkyBlue else TextPrimary,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                },
-                                onClick = {
-                                    onSelectKey(i)
-                                    keyMenuExpanded = false
-                                }
+                    // Scale / Mode Dropdown (Chromatic, Major, Minor, Phrygian, Dorian, etc.)
+                    Box(modifier = Modifier.weight(1f)) {
+                        Button(
+                            onClick = { scaleMenuExpanded = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(36.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BgDarkSlate,
+                                contentColor = TraceSkyBlue
                             )
+                        ) {
+                            Text(
+                                text = "${selectedScaleType.label} \u25BE",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = scaleMenuExpanded,
+                            onDismissRequest = { scaleMenuExpanded = false },
+                            modifier = Modifier.background(BarSlate)
+                        ) {
+                            for (scale in ScaleType.entries) {
+                                val isSelected = scale == selectedScaleType
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = scale.label,
+                                            color = if (isSelected) TraceSkyBlue else TextPrimary,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        onSelectScaleType(scale)
+                                        scaleMenuExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -797,7 +1307,7 @@ private fun TopHeaderBar(
                         onDismissRequest = { settingsMenuExpanded = false },
                         modifier = Modifier
                             .background(BarSlate)
-                            .width(230.dp)
+                            .width(240.dp)
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Text(
@@ -872,6 +1382,79 @@ private fun TopHeaderBar(
                                 )
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Button 3: Colorise Notes (OFF by default, opens ColoriseNotesDialog)
+                        Button(
+                            onClick = {
+                                settingsMenuExpanded = false
+                                onOpenColoriseDialog()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (coloriseNotesEnabled) GreenAccent.copy(alpha = 0.2f) else BgDarkSlate,
+                                contentColor = if (coloriseNotesEnabled) GreenAccent else TextPrimary
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Colorise Notes",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (coloriseNotesEnabled) "ON \u25B8" else "OFF \u25B8",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Button 4: Note Names / Notation (Western default, Indian Swaras, Solfege)
+                        Button(
+                            onClick = {
+                                settingsMenuExpanded = false
+                                onOpenNotationDialog()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BgDarkSlate,
+                                contentColor = TextPrimary
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Note Names",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${selectedNotation.shortLabel} \u25B8",
+                                    color = TraceSkyBlue,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -893,7 +1476,12 @@ private fun LinearPitchCanvas(
     pitchHistory: List<Float?>,
     currentHz: Float?,
     selectedKeyIndex: Int,
-    highlightPerfect: Boolean
+    selectedScaleType: ScaleType,
+    highlightPerfect: Boolean,
+    coloriseNotesEnabled: Boolean,
+    pitchTraceColor: Color,
+    scaleDegreeColors: List<Color>,
+    selectedNotation: NoteNotation
 ) {
     // Center MIDI note of the viewport (default 50f = D3, comfortable vocal middle)
     var centerMidi by remember { mutableFloatStateOf(50f) }
@@ -972,6 +1560,14 @@ private fun LinearPitchCanvas(
         }
     }
 
+    val colorisedLabelPaint = remember {
+        Paint().apply {
+            textSize = 28f
+            isAntiAlias = true
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+    }
+
     val liveKeyPaint = remember {
         Paint().apply {
             color = android.graphics.Color.parseColor("#38BDF8")
@@ -990,12 +1586,7 @@ private fun LinearPitchCanvas(
         }
     }
 
-    val noteNames = remember {
-        arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    }
     val sharpIndices = remember { setOf(1, 3, 6, 8, 10) }
-    // Relative major/diatonic scale intervals in semitones from the selected root key
-    val scaleIntervals = remember { setOf(0, 2, 4, 5, 7, 9, 11) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(
@@ -1076,19 +1667,42 @@ private fun LinearPitchCanvas(
                 return height - ((midi - minMidi) / visibleSemitones) * height
             }
 
+            val isChromatic = selectedScaleType == ScaleType.CHROMATIC
+            val rootKeyIdx = selectedKeyIndex.coerceIn(0, 11)
+            val activeIntervals = selectedScaleType.intervals
+
             // Helper: check if a MIDI value lands perfectly on an active graph note line (within ±0.18 semitones)
             fun isPerfectMidi(midi: Float): Boolean {
                 val nearestMidi = midi.roundToInt()
                 if (abs(midi - nearestMidi) > 0.18f) return false
+                if (isChromatic) return true
                 val noteIdx = ((nearestMidi % 12) + 12) % 12
-                return if (selectedKeyIndex in 0..11) {
-                    val relInterval = ((noteIdx - selectedKeyIndex) % 12 + 12) % 12
-                    relInterval in scaleIntervals
-                } else {
-                    true
-                }
+                val relInterval = ((noteIdx - rootKeyIdx) % 12 + 12) % 12
+                return relInterval in activeIntervals
             }
 
+            // Map a semitone interval (0..11 from root key) to its Scale Degree Color (1st..7th + Semitone)
+            fun scaleColorForNoteIndex(noteIndex: Int): Color {
+                val rel = ((noteIndex - rootKeyIdx) % 12 + 12) % 12
+                val colorIdx = if (activeIntervals.size == 7) {
+                    val idxInScale = activeIntervals.indexOf(rel)
+                    if (idxInScale in 0..6) idxInScale else 7
+                } else {
+                    when (rel) {
+                        0 -> 0 // 1st Tonic
+                        2 -> 1 // 2nd Supertonic
+                        3, 4 -> 2 // 3rd Mediant
+                        5 -> 3 // 4th Subdominant
+                        7 -> 4 // 5th Dominant
+                        8, 9 -> 5 // 6th Subtonic
+                        10, 11 -> 6 // 7th Leading
+                        else -> 7 // Semitone
+                    }
+                }
+                return scaleDegreeColors[colorIdx]
+            }
+
+            val activePitchColor = if (coloriseNotesEnabled) pitchTraceColor else TraceSkyBlue
             val currentMidiVal = currentHz?.let { hzToMidi(it) }
             val isCurrentlyPerfect = highlightPerfect && currentMidiVal != null && isPerfectMidi(currentMidiVal)
             val perfectLockedMidi = if (isCurrentlyPerfect && currentMidiVal != null) {
@@ -1104,38 +1718,41 @@ private fun LinearPitchCanvas(
             for (midi in firstNote..lastNote) {
                 val noteIndex = ((midi % 12) + 12) % 12
 
-                // Filter bars when a specific key is selected (Chromatic = -1 shows all 12)
-                if (selectedKeyIndex in 0..11) {
-                    val relativeInterval = ((noteIndex - selectedKeyIndex) % 12 + 12) % 12
-                    if (relativeInterval !in scaleIntervals) continue
+                // Filter bars when a non-chromatic scale is selected
+                if (!isChromatic) {
+                    val relativeInterval = ((noteIndex - rootKeyIdx) % 12 + 12) % 12
+                    if (relativeInterval !in activeIntervals) continue
                 }
 
                 val y = midiToY(midi.toFloat())
                 val octave = (midi / 12) - 1
-                val keyName = noteNames[noteIndex]
+                val keyName = formatKeyLabel(noteIndex, selectedNotation, rootKeyIdx)
                 val isSharp = noteIndex in sharpIndices
-                val isRootKey = if (selectedKeyIndex in 0..11) {
-                    noteIndex == selectedKeyIndex
-                } else {
-                    noteIndex == 0
-                }
+                val isRootKey = noteIndex == rootKeyIdx
                 val isLockedPerfectRow = (perfectLockedMidi != null && midi == perfectLockedMidi)
+                val noteCustomColor = if (coloriseNotesEnabled) scaleColorForNoteIndex(noteIndex) else null
 
                 // Subtle piano-roll row shading for sharp keys in Chromatic mode,
-                // root key highlight when a specific key is selected, or green glow when locked perfectly
+                // root key highlight when a scale/key is active, or green glow when locked perfectly
                 if (isLockedPerfectRow) {
                     drawRect(
                         color = GreenAccent.copy(alpha = 0.14f),
                         topLeft = Offset(0f, y - rowHeight / 2f),
                         size = androidx.compose.ui.geometry.Size(width, rowHeight)
                     )
-                } else if (selectedKeyIndex == -1 && isSharp) {
+                } else if (noteCustomColor != null) {
+                    drawRect(
+                        color = noteCustomColor.copy(alpha = if (isRootKey) 0.14f else 0.07f),
+                        topLeft = Offset(0f, y - rowHeight / 2f),
+                        size = androidx.compose.ui.geometry.Size(width, rowHeight)
+                    )
+                } else if (isChromatic && isSharp) {
                     drawRect(
                         color = Color(0xFF131D31),
                         topLeft = Offset(0f, y - rowHeight / 2f),
                         size = androidx.compose.ui.geometry.Size(width, rowHeight)
                     )
-                } else if (selectedKeyIndex in 0..11 && isRootKey) {
+                } else if (isRootKey) {
                     drawRect(
                         color = Color(0xFF17253B),
                         topLeft = Offset(0f, y - rowHeight / 2f),
@@ -1147,26 +1764,31 @@ private fun LinearPitchCanvas(
                 drawLine(
                     color = when {
                         isLockedPerfectRow -> GreenAccent
+                        noteCustomColor != null -> noteCustomColor
                         isRootKey -> Color(0xFF475569)
-                        selectedKeyIndex == -1 && isSharp -> GridLineSubtleColor
+                        isChromatic && isSharp -> GridLineSubtleColor
                         else -> GridLineColor
                     },
                     start = Offset(0f, y),
                     end = Offset(width, y),
                     strokeWidth = when {
                         isLockedPerfectRow -> 3.5f
+                        noteCustomColor != null -> if (isRootKey) 3.2f else 2.2f
                         isRootKey -> 2.5f
                         else -> 1.5f
                     }
                 )
 
                 // Draw key label on the left edge
-                if (selectedKeyIndex in 0..11 || !isSharp || rowHeight >= 26f) {
+                if (!isChromatic || !isSharp || rowHeight >= 26f) {
                     val label = if (isRootKey) "$keyName ($keyName$octave)" else "$keyName$octave"
                     val paint = when {
                         isLockedPerfectRow -> perfectKeyPaint
+                        noteCustomColor != null -> colorisedLabelPaint.apply {
+                            color = noteCustomColor.toArgb()
+                        }
                         isRootKey -> octaveLabelPaint
-                        selectedKeyIndex == -1 && isSharp -> sharpLabelPaint
+                        isChromatic && isSharp -> sharpLabelPaint
                         else -> naturalLabelPaint
                     }
                     drawContext.canvas.nativeCanvas.drawText(
@@ -1265,7 +1887,7 @@ private fun LinearPitchCanvas(
                     perfectPath.lineTo(prevX, prevY)
                 }
 
-                // Draw contrasting green highlight halo behind the sky-blue playing line on perfect segments
+                // Draw contrasting green highlight halo behind the playing line on perfect segments
                 if (highlightPerfect) {
                     drawPath(
                         path = perfectPath,
@@ -1287,10 +1909,10 @@ private fun LinearPitchCanvas(
                     )
                 }
 
-                // Primary playing line always keeps its distinct sky-blue color on top
+                // Primary playing line drawn on top in its configured Pitch color
                 drawPath(
                     path = path,
-                    color = TraceSkyBlue,
+                    color = activePitchColor,
                     style = Stroke(
                         width = 6f,
                         cap = StrokeCap.Round,
@@ -1314,12 +1936,16 @@ private fun LinearPitchCanvas(
                         )
                     }
                     drawCircle(
-                        color = TraceSkyBlue,
+                        color = activePitchColor,
                         radius = 8.5f,
                         center = Offset(lastActiveX, clampedY)
                     )
-                    val liveKeyText = frequencyToKeyName(lastActiveHz)
-                    val activeBadgePaint = if (lastActivePerfect) perfectKeyPaint else liveKeyPaint
+                    val liveKeyText = frequencyToKeyName(lastActiveHz, selectedNotation, selectedKeyIndex)
+                    val activeBadgePaint = if (lastActivePerfect) {
+                        perfectKeyPaint
+                    } else {
+                        liveKeyPaint.apply { color = activePitchColor.toArgb() }
+                    }
                     val textWidth = activeBadgePaint.measureText(liveKeyText)
                     val badgeX = (lastActiveX - textWidth - 16f).coerceAtLeast(16f)
                     val badgeY = if (clampedY > 45f) clampedY - 14f else clampedY + 36f
@@ -1550,23 +2176,54 @@ private fun detectPitchMPM(
     return if (frequency in MIN_HZ..MAX_HZ) frequency else null
 }
 
+private val WESTERN_NOTES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+private val INDIAN_SWARAS = arrayOf("Sa", "re", "Re", "ga", "Ga", "Ma", "ma", "Pa", "dha", "Dha", "ni", "Ni")
+private val SOLFEGE_NOTES = arrayOf("Do", "Di", "Re", "Ri", "Mi", "Fa", "Fi", "Sol", "Si", "La", "Li", "Ti")
+
 /**
- * Converts a frequency in Hz to the musical key name without octave (e.g., "C#", "D", "A").
+ * Formats a note index (0..11) according to the selected NoteNotation.
+ * For Indian Swaras, intervals are relative to the selected root key (or C when Chromatic).
  */
-private fun frequencyToKeyName(hz: Float): String {
-    val noteNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    val midi = (12.0 * log2(hz / 440.0) + 69.0).roundToInt()
-    val noteIndex = ((midi % 12) + 12) % 12
-    return noteNames[noteIndex]
+private fun formatKeyLabel(
+    noteIndex: Int,
+    notation: NoteNotation,
+    selectedKeyIndex: Int
+): String {
+    val cleanIdx = ((noteIndex % 12) + 12) % 12
+    return when (notation) {
+        NoteNotation.WESTERN -> WESTERN_NOTES[cleanIdx]
+        NoteNotation.INDIAN -> {
+            val root = if (selectedKeyIndex in 0..11) selectedKeyIndex else 0
+            val rel = ((cleanIdx - root) % 12 + 12) % 12
+            INDIAN_SWARAS[rel]
+        }
+        NoteNotation.SOLFEGE -> SOLFEGE_NOTES[cleanIdx]
+    }
 }
 
 /**
- * Converts a frequency in Hz to the closest musical note name with octave (e.g., "C#3", "A4").
+ * Converts a frequency in Hz to the musical key name without octave according to selected notation.
  */
-private fun frequencyToNoteName(hz: Float): String {
-    val noteNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+private fun frequencyToKeyName(
+    hz: Float,
+    notation: NoteNotation = NoteNotation.WESTERN,
+    selectedKeyIndex: Int = -1
+): String {
+    val midi = (12.0 * log2(hz / 440.0) + 69.0).roundToInt()
+    val noteIndex = ((midi % 12) + 12) % 12
+    return formatKeyLabel(noteIndex, notation, selectedKeyIndex)
+}
+
+/**
+ * Converts a frequency in Hz to the closest musical note name with octave according to selected notation.
+ */
+private fun frequencyToNoteName(
+    hz: Float,
+    notation: NoteNotation = NoteNotation.WESTERN,
+    selectedKeyIndex: Int = -1
+): String {
     val midi = (12.0 * log2(hz / 440.0) + 69.0).roundToInt()
     val noteIndex = ((midi % 12) + 12) % 12
     val octave = (midi / 12) - 1
-    return "${noteNames[noteIndex]}$octave"
+    return "${formatKeyLabel(noteIndex, notation, selectedKeyIndex)}$octave"
 }
