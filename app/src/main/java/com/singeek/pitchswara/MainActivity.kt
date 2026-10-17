@@ -1495,8 +1495,8 @@ private fun LinearPitchCanvas(
 ) {
     // Center MIDI note of the viewport (default 50f = D3, comfortable vocal middle)
     var centerMidi by remember { mutableFloatStateOf(50f) }
-    // Number of semitones (keys) visible vertically at once (default 15 keys for generous room)
-    var visibleSemitones by remember { mutableFloatStateOf(15f) }
+    // Number of semitones (keys) visible vertically at once (default 24 keys = 2 octaves)
+    var visibleSemitones by remember { mutableFloatStateOf(24f) }
     // Number of history points visible horizontally at once (default 0.5x speed = 2x DEFAULT_VISIBLE_POINTS)
     var visibleHistoryPoints by remember { mutableFloatStateOf(DEFAULT_VISIBLE_POINTS * 2f) }
     // Automatically pan the graph up or down when singing higher/lower
@@ -2031,7 +2031,7 @@ private fun LinearPitchCanvas(
                             .coerceIn(31f, 84f)
                     } else {
                         centerMidi = 50f
-                        visibleSemitones = 15f
+                        visibleSemitones = 24f
                         visibleHistoryPoints = DEFAULT_VISIBLE_POINTS * 2f
                     }
                 },
